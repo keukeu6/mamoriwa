@@ -1214,7 +1214,9 @@ function startVoiceFallback() {
   }, 2500);
 }
 
-/* ---------- 操作（家族ビュー） ---------- */
+/* ---------- 操作（家族ビュー） ----------
+   きろくの履歴は「本人の見守りシグナル」専用のため、
+   家族側の管理操作（お薬・予定の登録や削除）は履歴に残さない */
 function addMedication(ev) {
   ev.preventDefault();
   const name = document.getElementById('med-name').value.trim();
@@ -1222,7 +1224,6 @@ function addMedication(ev) {
   if (!name || !time) return;
   state.medications.push({ id: 'm' + Date.now(), name, scheduledTime: time, takenAt: null });
   state.medications.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
-  addTimeline('💊', 'お薬を登録：' + name + '（' + time + '）');
   saveState();
   render();
 }
@@ -1231,7 +1232,6 @@ function removeMedication(id) {
   if (!med) return;
   if (!confirm('「' + med.name + '」を削除します。よろしいですか？')) return;
   state.medications = state.medications.filter(m => m.id !== id);
-  addTimeline('💊', 'お薬を削除：' + med.name);
   saveState();
   render();
 }
@@ -1243,7 +1243,6 @@ function addAppointment(ev) {
   if (!title || !date) return;
   state.appointments.push({ id: 'a' + Date.now(), title, date, notified: false });
   state.appointments.sort((a, b) => a.date.localeCompare(b.date));
-  addTimeline('📅', '予定を追加：' + title + '（' + fmtDateJP(date) + '）');
   saveState();
   render();
 }
