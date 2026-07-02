@@ -319,6 +319,12 @@
   }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
 
+  .voice-msg {
+    margin-top: 10px;
+    color: var(--orange);
+    font-weight: bold;
+    font-size: 16px;
+  }
   .voice-note {
     margin-top: 12px;
     background: rgba(255, 255, 255, 0.6);
@@ -1022,11 +1028,60 @@ function recordMood(mood) {
   saveState();
   render();
 }
+/* 音声入力：Web Speech API（ブラウザ内蔵の音声認識）で実際に文字起こしする。
+   iPhoneのSafari・AndroidのChromeとも対応。マイク許可が必要（HTTPS上で動作）。
+   非対応ブラウザでは固定の文字起こし例で代替し、デモが止まらないようにする。 */
+let recognizer = null;
 function startVoice() {
   if (state.recording) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { startVoiceFallback(); return; }
+  recognizer = new SR();
+  recognizer.lang = 'ja-JP';
+  recognizer.interimResults = false;
+  recognizer.maxAlternatives = 1;
+  let done = false;
+  recognizer.onresult = (e) => {
+    done = true;
+    finishVoice(e.results[0][0].transcript);
+  };
+  recognizer.onerror = (e) => {
+    if (done) return;
+    done = true;
+    finishVoice(null, e.error === 'not-allowed'
+      ? 'マイクが つかえませんでした。ブラウザの設定で マイクを ゆるしてください'
+      : 'うまく ききとれませんでした。もういちど おためしください');
+  };
+  recognizer.onend = () => {
+    if (!done) { done = true; finishVoice(null, 'うまく ききとれませんでした。もういちど おためしください'); }
+  };
   state.recording = true;
+  state.voiceMsg = null;
   render();
-  // プロトタイプ：2.5秒の「録音中」表示ののち固定の文字起こし例を記録する
+  recognizer.start();
+}
+function stopVoice() {
+  if (recognizer) recognizer.stop();  // 結果はonresult / onendで処理される
+}
+function finishVoice(text, errMsg) {
+  state.recording = false;
+  recognizer = null;
+  if (text) {
+    state.voiceMsg = null;
+    state.moodLogs.push({ id: 'voice' + Date.now(), date: todayISO(), mood: null, voiceNote: text });
+    addTimeline('🎤', '声のメッセージ：「' + text + '」');
+    state.lastChanged = 'voice';
+    saveState();
+  } else {
+    state.voiceMsg = errMsg;
+  }
+  render();
+}
+function startVoiceFallback() {
+  // 音声認識が使えない環境：2.5秒の「録音中」表示ののち固定の文字起こし例を記録
+  state.recording = true;
+  state.voiceMsg = null;
+  render();
   setTimeout(() => {
     state.recording = false;
     state.moodLogs.push({ id: 'voice' + Date.now(), date: todayISO(), mood: null, voiceNote: VOICE_TRANSCRIPT_EXAMPLE });
@@ -1216,8 +1271,11 @@ function renderPerson() {
           ).join('')
         + '</div>';
   html += state.recording
-        ? '<button class="btn-voice recording"><span class="dot"></span>ろくおん中…（はなしてください）</button>'
+        ? '<button class="btn-voice recording" onclick="stopVoice()"><span class="dot"></span>ろくおん中… はなしおわったら タップ</button>'
         : '<button class="btn-voice" onclick="startVoice()">🎤 こえで つたえる</button>';
+  if (state.voiceMsg) {
+    html += '<div class="voice-msg">' + esc(state.voiceMsg) + '</div>';
+  }
   const voice = todayVoiceNote();
   if (voice) {
     html += '<div class="voice-note' + (state.lastChanged === 'voice' ? ' pop' : '') + '">'
