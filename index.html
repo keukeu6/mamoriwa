@@ -725,15 +725,9 @@
 
 /* ---------- 状態（データモデルは引き継ぎ資料 第4章に準拠） ---------- */
 const state = {
-  medications: [
-    { id: 'm1', name: '血圧の薬',         scheduledTime: '08:00', takenAt: null },
-    { id: 'm2', name: '胃薬',             scheduledTime: '12:30', takenAt: null },
-    { id: 'm3', name: 'コレステロールの薬', scheduledTime: '19:00', takenAt: null },
-  ],
+  medications: [],    // { id, name, scheduledTime, takenAt } 登録は家族ビューから
   moodLogs: [],       // { id, date, mood: 'good'|'normal'|'bad'|null, voiceNote }
-  appointments: [
-    { id: 'a1', title: '内科 定期通院', date: addDaysISO(3), notified: false },
-  ],
+  appointments: [],   // { id, title, date, notified } 登録は家族ビューから
   timeline: [],       // { time: Date, icon, text } 家族ビューの履歴用
   currentView: 'person',
   recording: false,
@@ -1185,6 +1179,27 @@ function startVoiceFallback() {
 }
 
 /* ---------- 操作（家族ビュー） ---------- */
+function addMedication(ev) {
+  ev.preventDefault();
+  const name = document.getElementById('med-name').value.trim();
+  const time = document.getElementById('med-time').value;
+  if (!name || !time) return;
+  state.medications.push({ id: 'm' + Date.now(), name, scheduledTime: time, takenAt: null });
+  state.medications.sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
+  addTimeline('💊', 'お薬を登録：' + name + '（' + time + '）');
+  saveState();
+  render();
+}
+function removeMedication(id) {
+  const med = state.medications.find(m => m.id === id);
+  if (!med) return;
+  if (!confirm('「' + med.name + '」を削除します。よろしいですか？')) return;
+  state.medications = state.medications.filter(m => m.id !== id);
+  addTimeline('💊', 'お薬を削除：' + med.name);
+  saveState();
+  render();
+}
+
 function addAppointment(ev) {
   ev.preventDefault();
   const title = document.getElementById('appt-title').value.trim();
@@ -1217,7 +1232,9 @@ function aiSummary() {
   const total = state.medications.length;
   const taken = takenCount();
   const parts = [];
-  parts.push('今日のお薬は' + total + '回のうち' + taken + '回が記録済みです。');
+  parts.push(total
+    ? '今日のお薬は' + total + '回のうち' + taken + '回が記録済みです。'
+    : 'お薬はまだ登録されていません。');
   const alerts = familyAlertMeds();
   if (alerts.length) parts.push(alerts.map(m => m.scheduledTime + 'の' + m.name).join('、') + 'がまだ記録されていません。');
   const mood = todayMood();
@@ -1345,6 +1362,9 @@ function renderPerson() {
 
   // ① 服薬チェック（中心機能）
   html += '<div class="section-title">💊 今日のおくすり</div>';
+  if (!state.medications.length) {
+    html += '<div class="card empty-note">お薬は まだ登録されていません。<br>ご家族の画面から 登録できます。</div>';
+  }
   for (const med of state.medications) {
     if (med.takenAt) {
       const justTaken = state.lastChanged === med.id;
@@ -1426,10 +1446,11 @@ function renderFamily() {
   const mood = todayMood();
   const appt = nextAppointment();
   html += '<div class="summary-grid">'
-        + '<div class="summary-card ' + (medOk ? 'ok' : 'warn') + '">'
+        + '<div class="summary-card ' + (total === 0 ? '' : medOk ? 'ok' : 'warn') + '">'
         +   '<div class="label">💊 服薬</div>'
-        +   '<div class="value ' + (medOk ? 'ok' : 'warn') + '">' + taken + ' / ' + total + ' 済み</div>'
-        +   '<div class="sub">' + (medOk ? '順調です' : '未服薬あり') + '</div></div>'
+        +   '<div class="value ' + (total === 0 ? '' : medOk ? 'ok' : 'warn') + '">'
+        +     (total === 0 ? '未登録' : taken + ' / ' + total + ' 済み') + '</div>'
+        +   '<div class="sub">' + (total === 0 ? '「お薬の管理」から登録できます' : medOk ? '順調です' : '未服薬あり') + '</div></div>'
         + '<div class="summary-card ' + (mood ? (mood === 'bad' ? 'warn' : 'ok') : '') + '">'
         +   '<div class="label">🗣️ きょうの体調</div>'
         +   '<div class="value ' + (mood === 'bad' ? 'warn' : mood ? 'ok' : '') + '">'
@@ -1458,6 +1479,22 @@ function renderFamily() {
     html += '<div class="empty-note">まだ きょうの記録はありません</div>';
   }
   html += '</div>';
+
+  // ① お薬の管理（登録・削除は家族側から）
+  html += '<div class="section-title">💊 お薬の管理</div><div class="card">';
+  if (state.medications.length) {
+    html += state.medications.map(m =>
+      '<div class="appt-list-item"><span>' + esc(m.name) + '　<small style="color:var(--gray)">'
+      + m.scheduledTime + '</small></span>'
+      + '<button class="btn-undo" onclick="removeMedication(\'' + m.id + '\')">削除</button></div>'
+    ).join('');
+  } else {
+    html += '<div class="empty-note">まだお薬が登録されていません。毎日飲むお薬を登録すると、本人の画面に表示されます。</div>';
+  }
+  html += '<form class="appt-form" style="margin-top:12px" onsubmit="addMedication(event)">'
+        + '<input id="med-name" type="text" placeholder="お薬の名前（例：血圧の薬）">'
+        + '<input id="med-time" type="time" value="08:00">'
+        + '<button type="submit">＋ お薬を登録する</button></form></div>';
 
   // ③ 通院・予定管理（登録は家族側から行う想定）
   html += '<div class="section-title">📅 予定の管理</div><div class="card">';
