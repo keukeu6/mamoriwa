@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>まもりわ - 見守りアプリ プロトタイプ</title>
+<title>まもりわ — 高齢者見守りアプリ</title>
 <!-- PWA：ホーム画面に追加するとアプリとして全画面起動する -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#00695c">
@@ -468,6 +468,37 @@
   .btn-gear:hover { transform: translateY(-1px); }
   .btn-gear:active { transform: scale(0.9); }
 
+  /* ---------- はじめる画面（初回起動） ---------- */
+  .welcome { text-align: center; padding-top: 56px; }
+  .welcome-icon {
+    width: 108px; height: 108px;
+    border-radius: 27px;
+    box-shadow: 0 14px 36px rgba(23, 48, 43, 0.28);
+  }
+  .welcome-title {
+    font-size: 36px;
+    font-weight: 800;
+    letter-spacing: 6px;
+    margin-top: 20px;
+    background: linear-gradient(120deg, #00796b, #2e9e6b);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .welcome-sub {
+    font-size: 18px;
+    color: var(--gray);
+    line-height: 1.9;
+    margin: 14px 0 34px;
+  }
+  .welcome-start {
+    display: block;
+    max-width: 300px;
+    margin: 0 auto;
+    font-size: 20px;
+    min-height: 64px;
+  }
+
   /* ---------- 初回の利用者選択 ---------- */
   .role-select { text-align: center; padding-top: 20px; }
   .role-title { font-size: 24px; font-weight: bold; line-height: 1.5; margin-bottom: 22px; }
@@ -645,7 +676,7 @@
   <header>
     <div class="header-top">
       <div>
-        <span class="logo">まもりわ</span><span class="logo-sub">高齢者見守りアプリ（プロトタイプ）</span>
+        <span class="logo">まもりわ</span><span class="logo-sub">高齢者見守りアプリ</span>
       </div>
       <button class="btn-gear" id="btn-gear" onclick="openSettings()" aria-label="せってい">⚙️</button>
     </div>
@@ -656,7 +687,7 @@
     </div>
   </header>
   <main id="main"></main>
-  <footer>第1工程プロトタイプ — 本人の手動記録のみで完結（ハードウェア連携なし）</footer>
+  <footer>まもりわ — はなれて暮らす家族に「だいじょうぶ」が届く</footer>
 </div>
 
 <!-- 設定モーダル -->
@@ -674,7 +705,7 @@
     <div class="modal-section">
       <label class="toggle-row">
         <input type="checkbox" id="tabs-toggle" onchange="toggleTabs(this.checked)">
-        デモ用：ビュー切り替えタブを表示する
+        本人と家族の画面を切り替えるタブを表示する
       </label>
     </div>
     <div class="modal-section">
@@ -817,8 +848,10 @@ function chooseRole(role) {
   localStorage.setItem(ROLE_KEY, role);
   state.role = role;
   state.currentView = role;
-  // 同期が使える端末でグループ未参加なら、つづけてグループ設定へ
-  state.groupSetup = sync.enabled && !state.groupCode && !state.fixedView;
+  // グループ未参加なら、つづけてグループ設定へ（同期設定がある環境のみ）。
+  // sync.enabled ではなく設定の有無で判定する：SDKの読み込みが終わる前に
+  // タップが進んでもグループ設定を飛ばさないため
+  state.groupSetup = !!window.MAMORIWA_FIREBASE_CONFIG && !state.groupCode && !state.fixedView;
   render(true);
 }
 function setRole(role) {
@@ -833,7 +866,7 @@ function openSettings() {
   let group;
   if (!sync.enabled) {
     group = '<div class="modal-label">みまもりグループ（家族との同期）</div>'
-      + '<div class="empty-note" style="font-size:14px">この配布版では未設定です（設定方法はREADME参照）</div>';
+      + '<div class="empty-note" style="font-size:14px">この環境ではご利用いただけません</div>';
   } else if (state.groupCode) {
     group = '<div class="modal-label">みまもりグループ — 同期中 🔗</div>'
       + '<div class="group-code small">コード ' + esc(state.groupCode) + '</div>'
@@ -1020,6 +1053,7 @@ function leaveGroup() {
 
 /* ---------- グループ設定のUI操作 ---------- */
 async function uiCreateGroup() {
+  if (!sync.enabled) { alert('通信のじゅんび中です。すこし待って、もういちど おしてください'); return; }
   const btn = document.getElementById('btn-create-group');
   if (btn) { btn.disabled = true; btn.querySelector('.role-name').textContent = '作成中…'; }
   try {
@@ -1032,6 +1066,7 @@ async function uiCreateGroup() {
   render(true);
 }
 async function uiJoinGroup() {
+  if (!sync.enabled) { alert('通信のじゅんび中です。すこし待って、もういちど おしてください'); return; }
   const code = document.getElementById('group-code-input').value.trim();
   if (!/^\d{6}$/.test(code)) { alert('6けたの数字コードを入れてください'); return; }
   const ok = await joinGroup(code).catch(() => false);
@@ -1205,7 +1240,7 @@ function render(animate = false) {
   const setup = !choosing && (state.groupSetup || state.groupCreated);  // グループ設定中
   const tabs = document.getElementById('tabs');
   const gear = document.getElementById('btn-gear');
-  // タブは「デモ用トグルON」のときだけ表示。⚙️は選択後に表示（URL固定時は非表示）
+  // タブは設定でONのときだけ表示。⚙️は利用開始後に表示（URL固定時は非表示）
   tabs.style.display = (!choosing && !setup && !state.fixedView && state.tabsMode) ? '' : 'none';
   gear.style.display = (!choosing && !setup && !state.fixedView) ? '' : 'none';
   tabs.dataset.view = state.currentView;
@@ -1216,11 +1251,25 @@ function render(animate = false) {
     alerts ? '<span class="badge">' + alerts + '</span>' : '';
   const main = document.getElementById('main');
   main.className = animate ? 'anim' : '';
-  main.innerHTML = choosing ? renderRoleSelect()
+  main.innerHTML = choosing ? (state.welcomeDone ? renderRoleSelect() : renderWelcome())
     : state.groupCreated ? renderGroupCreated()
     : state.groupSetup ? renderGroupSetup()
     : state.currentView === 'person' ? renderPerson() : renderFamily();
   state.lastChanged = null;
+}
+
+/* ---------- はじめる画面（初回起動） ---------- */
+function renderWelcome() {
+  return '<div class="welcome">'
+    + '<img class="welcome-icon" src="icons/icon-192.png" alt="まもりわ">'
+    + '<div class="welcome-title">まもりわ</div>'
+    + '<div class="welcome-sub">はなれて暮らす家族に<br>「だいじょうぶ」が届く<br>見守りアプリ</div>'
+    + '<button class="btn-close welcome-start" onclick="startOnboarding()">はじめる</button>'
+    + '</div>';
+}
+function startOnboarding() {
+  state.welcomeDone = true;
+  render(true);
 }
 
 /* ---------- グループ設定画面 ---------- */
@@ -1395,7 +1444,7 @@ function renderFamily() {
 
   // AI要約（本格実装ではLLM API。プロトタイプでは自動生成の例文）
   html += '<div class="section-title">🤖 AI要約</div>'
-        + '<div class="ai-summary"><span class="label">きょうの様子まとめ（プロトタイプでは例文を自動表示）</span>'
+        + '<div class="ai-summary"><span class="label">きょうの様子まとめ</span>'
         + esc(aiSummary()) + '</div>';
 
   // 記録履歴（本人の記録がリアルタイムに反映される）
