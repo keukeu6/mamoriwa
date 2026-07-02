@@ -1,16 +1,11 @@
 /* みまもりグループ（家族とのリアルタイム同期）の設定ファイル。
-   ここにFirebaseの設定を貼り付けると同期が有効になる。
-   null のままなら端末内保存のみのローカルモードで動く。
-   セットアップ手順は README.md の「同期のセットアップ」を参照。 */
-window.MAMORIWA_FIREBASE_CONFIG = null;
-
-/* 例（Firebaseコンソールで発行されたものに置き換える）：
+   Firebase Web設定は公開されても問題ない仕様（秘密鍵ではない）。
+   アクセス制御はFirestoreルール＋匿名認証で行う（README参照）。 */
 window.MAMORIWA_FIREBASE_CONFIG = {
-  apiKey: "AIza....",
-  authDomain: "mamoriwa-xxxxx.firebaseapp.com",
-  projectId: "mamoriwa-xxxxx",
-  storageBucket: "mamoriwa-xxxxx.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:xxxxxxxxxxxxxxxx"
+  apiKey: "AIzaSyD1NC_zrTpxkZvONtXYHnaat3-mcpvrXlc",
+  authDomain: "mamoriwa-fc4ca.firebaseapp.com",
+  projectId: "mamoriwa-fc4ca",
+  storageBucket: "mamoriwa-fc4ca.firebasestorage.app",
+  messagingSenderId: "548823501351",
+  appId: "1:548823501351:web:c179d457188b2d0ce1dc02"
 };
-*/

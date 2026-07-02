@@ -872,13 +872,22 @@ function syncInit() {
     document.head.appendChild(s);
   });
   load('https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js')
-    .then(() => load('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js'))
+    .then(() => Promise.all([
+      load('https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js'),
+      load('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js'),
+    ]))
     .then(() => {
       firebase.initializeApp(config);
-      sync.db = firebase.firestore();
-      sync.enabled = true;
-      if (state.groupCode) syncSubscribe();
-      render();
+      // 匿名認証：Firestoreルールは「認証済み（アプリ経由）のみ読み書き可」なので、
+      // 同期を使う前にサインインを済ませる。2回目以降は端末に保存された認証が自動復元される。
+      firebase.auth().onAuthStateChanged((user) => {
+        if (!user || sync.enabled) return;
+        sync.db = firebase.firestore();
+        sync.enabled = true;
+        if (state.groupCode) syncSubscribe();
+        render();
+      });
+      firebase.auth().signInAnonymously().catch(() => {});
     })
     .catch(() => { /* SDKが読めない（オフライン等）場合はローカルモードで続行 */ });
 }
