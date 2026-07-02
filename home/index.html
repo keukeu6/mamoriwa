@@ -367,24 +367,27 @@
   </div>
 </footer>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
-  // QRコード生成（ライブラリが読めない環境ではQR枠ごと非表示にする）
-  try {
-    new QRCode(document.getElementById('qrcode'), {
-      text: 'https://keukeu6.github.io/mamoriwa/',
-      width: 148, height: 148,
-      colorDark: '#17302b', colorLight: '#ffffff',
-    });
-  } catch (e) {
-    document.getElementById('qrcode').style.display = 'none';
-  }
-
-  // スクロールでふわっと表示
+  // スクロールでふわっと表示（CDNの読み込みに依存させず最初に登録する）
   const io = new IntersectionObserver((entries) => {
     entries.forEach((en) => { if (en.isIntersecting) { en.target.classList.add('on'); io.unobserve(en.target); } });
   }, { threshold: 0.15 });
   document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+
+  // QRコード生成：ライブラリは後から動的に読み込み、失敗したらQR枠だけ隠す
+  const qrScript = document.createElement('script');
+  qrScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+  qrScript.onload = () => {
+    try {
+      new QRCode(document.getElementById('qrcode'), {
+        text: 'https://keukeu6.github.io/mamoriwa/',
+        width: 148, height: 148,
+        colorDark: '#17302b', colorLight: '#ffffff',
+      });
+    } catch (e) { qrScript.onerror(); }
+  };
+  qrScript.onerror = () => { document.getElementById('qrcode').style.display = 'none'; };
+  document.body.appendChild(qrScript);
 </script>
 </body>
 </html>
