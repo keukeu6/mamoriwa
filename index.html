@@ -568,6 +568,66 @@
     box-shadow: 0 8px 20px rgba(0, 105, 92, 0.28), inset 0 1px 0 rgba(255,255,255,0.3);
   }
 
+  /* ---------- みまもりグループ（同期）設定 ---------- */
+  .group-join { display: flex; gap: 10px; }
+  .group-join input {
+    flex: 1;
+    min-width: 0;
+    font-size: 28px;
+    font-weight: bold;
+    letter-spacing: 5px;
+    text-align: center;
+    padding: 12px;
+    border-radius: 16px;
+    border: 2px solid rgba(23, 48, 43, 0.18);
+    background: rgba(255, 255, 255, 0.8);
+    font-family: inherit;
+    color: var(--text);
+  }
+  .group-join input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 105, 92, 0.15);
+  }
+  .group-join button {
+    border: none;
+    font-family: inherit;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 0 20px;
+    min-height: 60px;
+    border-radius: 16px;
+    cursor: pointer;
+    flex-shrink: 0;
+    background: linear-gradient(145deg, #00897b, #00695c);
+    color: #fff;
+    box-shadow: 0 8px 20px rgba(0, 105, 92, 0.28), inset 0 1px 0 rgba(255,255,255,0.3);
+    transition: transform 0.18s var(--ease-out);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .group-join button:active { transform: scale(0.96); }
+  .group-divider { color: var(--gray); font-size: 15px; margin: 18px 0 12px; }
+  .btn-skip {
+    border: none;
+    background: none;
+    color: var(--gray);
+    font-size: 16px;
+    font-family: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+    margin-top: 14px;
+    padding: 8px;
+  }
+  .group-code-card { text-align: center; }
+  .group-code {
+    font-size: 46px;
+    font-weight: 800;
+    letter-spacing: 8px;
+    color: var(--accent);
+    margin: 6px 0;
+  }
+  .group-code.small { font-size: 22px; letter-spacing: 3px; margin: 4px 0; }
+
   /* 動きを控えたい設定の利用者には静的表示（高齢者配慮） */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -604,6 +664,7 @@
         <button id="set-role-family" onclick="setRole('family')">👨‍👩‍👧 家族<br><small>みまもる</small></button>
       </div>
     </div>
+    <div class="modal-section" id="group-section"></div>
     <div class="modal-section">
       <label class="toggle-row">
         <input type="checkbox" id="tabs-toggle" onchange="toggleTabs(this.checked)">
@@ -617,6 +678,7 @@
   </div>
 </div>
 
+<script src="firebase-config.js"></script>
 <script>
 /* =========================================================
    まもりわ 第1工程プロトタイプ
@@ -639,6 +701,9 @@ const state = {
   currentView: 'person',
   recording: false,
   lastChanged: null,  // 直前に記録された要素だけをポップ表示させるための目印
+  groupCode: null,    // みまもりグループの6桁コード（参加中のみ）
+  groupSetup: false,  // グループ設定画面を表示中
+  groupCreated: false, // グループ作成直後のコード表示画面
 };
 
 const FAMILY_GRACE_MIN = 30;  // 予定時刻からこの分数を過ぎて未記録なら家族に「未服薬」注意
@@ -693,7 +758,7 @@ function esc(s) {
 
 /* ---------- 端末への保存（PWA用：閉じても記録が残る） ---------- */
 const STORAGE_KEY = 'mamoriwa-state-v1';
-function saveState() {
+function saveStateLocal() {
   const data = {
     savedDate: todayISO(),
     medications: state.medications,
@@ -702,6 +767,10 @@ function saveState() {
     timeline: state.timeline.map(t => ({ icon: t.icon, text: t.text, time: t.time.toISOString() })),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+function saveState() {
+  saveStateLocal();
+  syncPush();  // みまもりグループ参加中なら家族の端末にも反映
 }
 function loadState() {
   try {
@@ -728,6 +797,7 @@ function resetDemo() {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(ROLE_KEY);
     localStorage.removeItem(TABS_KEY);
+    localStorage.removeItem(GROUP_KEY);
     location.reload();
   }
 }
@@ -741,6 +811,8 @@ function chooseRole(role) {
   localStorage.setItem(ROLE_KEY, role);
   state.role = role;
   state.currentView = role;
+  // 同期が使える端末でグループ未参加なら、つづけてグループ設定へ
+  state.groupSetup = sync.enabled && !state.groupCode && !state.fixedView;
   render(true);
 }
 function setRole(role) {
@@ -751,6 +823,20 @@ function openSettings() {
   document.getElementById('set-role-person').classList.toggle('current', state.role === 'person');
   document.getElementById('set-role-family').classList.toggle('current', state.role === 'family');
   document.getElementById('tabs-toggle').checked = state.tabsMode;
+  // みまもりグループの状態表示
+  let group;
+  if (!sync.enabled) {
+    group = '<div class="modal-label">みまもりグループ（家族との同期）</div>'
+      + '<div class="empty-note" style="font-size:14px">この配布版では未設定です（設定方法はREADME参照）</div>';
+  } else if (state.groupCode) {
+    group = '<div class="modal-label">みまもりグループ — 同期中 🔗</div>'
+      + '<div class="group-code small">コード ' + esc(state.groupCode) + '</div>'
+      + '<button class="btn-danger" style="margin-top:8px" onclick="uiLeaveGroup()">グループから退出する</button>';
+  } else {
+    group = '<div class="modal-label">みまもりグループ（家族との同期）</div>'
+      + '<button class="btn-close" style="padding:12px" onclick="openGroupSetup()">グループにつなげる／作る</button>';
+  }
+  document.getElementById('group-section').innerHTML = group;
   document.getElementById('settings').classList.add('open');
 }
 function closeSettings() {
@@ -760,6 +846,155 @@ function toggleTabs(on) {
   state.tabsMode = on;
   localStorage.setItem(TABS_KEY, on ? '1' : '0');
   render();
+}
+
+/* ========== みまもりグループ（家族とのリアルタイム同期） ==========
+   仕組み：家族が6桁コードでグループを作成 → 本人がコードを入力して参加。
+   記録は Firestore の groups/{コード} に保存され、参加端末へリアルタイム配信される。
+   firebase-config.js に設定が入っている場合のみ有効。
+   設定がなければ従来どおり端末内保存のみのローカルモードで動く。 */
+const GROUP_KEY = 'mamoriwa-group';
+const sync = { enabled: false, db: null, unsubscribe: null, pushTimer: null };
+
+function syncInit() {
+  const config = window.MAMORIWA_FIREBASE_CONFIG;
+  if (!config) return;
+  // SDKは設定がある端末だけ読み込む（ローカルモードを軽く保つ）
+  const load = (src) => new Promise((ok, ng) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = ok; s.onerror = ng;
+    document.head.appendChild(s);
+  });
+  load('https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js')
+    .then(() => load('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js'))
+    .then(() => {
+      firebase.initializeApp(config);
+      sync.db = firebase.firestore();
+      sync.enabled = true;
+      if (state.groupCode) syncSubscribe();
+      render();
+    })
+    .catch(() => { /* SDKが読めない（オフライン等）場合はローカルモードで続行 */ });
+}
+
+function groupDoc() { return sync.db.collection('groups').doc(state.groupCode); }
+
+function sharedData() {
+  return {
+    savedDate: todayISO(),
+    medications: state.medications,
+    moodLogs: state.moodLogs,
+    appointments: state.appointments,
+    timeline: state.timeline.map(t => ({ icon: t.icon, text: t.text, time: t.time.toISOString() })),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function syncPush() {
+  if (!sync.enabled || !state.groupCode) return;
+  clearTimeout(sync.pushTimer);
+  sync.pushTimer = setTimeout(() => { groupDoc().set(sharedData()).catch(() => {}); }, 300);
+}
+
+function applyRemote(data) {
+  state.medications = data.medications || [];
+  state.moodLogs = data.moodLogs || [];
+  state.appointments = data.appointments || [];
+  state.timeline = (data.timeline || []).map(t => ({ ...t, time: new Date(t.time) }));
+  if (data.savedDate !== todayISO()) {
+    // 日付が変わっていたら「今日の記録」をリセットし、グループにも反映
+    state.medications.forEach(m => { m.takenAt = null; });
+    state.timeline = [];
+    saveState();
+  } else {
+    saveStateLocal();
+  }
+  render();
+}
+
+function syncSubscribe() {
+  if (sync.unsubscribe) sync.unsubscribe();
+  sync.unsubscribe = groupDoc().onSnapshot((snap) => {
+    if (!snap.exists) return;
+    if (snap.metadata.hasPendingWrites) return;  // 自分の書き込みは適用済み
+    applyRemote(snap.data());
+  });
+}
+
+async function createGroup() {
+  // 6桁の数字コード：家族が電話でも本人に伝えやすい形式
+  for (let i = 0; i < 5; i++) {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const ref = sync.db.collection('groups').doc(code);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      state.groupCode = code;
+      localStorage.setItem(GROUP_KEY, code);
+      await ref.set(sharedData());
+      syncSubscribe();
+      return code;
+    }
+  }
+  throw new Error('code-collision');
+}
+
+async function joinGroup(code) {
+  const ref = sync.db.collection('groups').doc(code);
+  const snap = await ref.get();
+  if (!snap.exists) return false;
+  state.groupCode = code;
+  localStorage.setItem(GROUP_KEY, code);
+  applyRemote(snap.data());  // 参加時はグループ側のデータを正とする
+  syncSubscribe();
+  return true;
+}
+
+function leaveGroup() {
+  if (sync.unsubscribe) { sync.unsubscribe(); sync.unsubscribe = null; }
+  state.groupCode = null;
+  localStorage.removeItem(GROUP_KEY);
+}
+
+/* ---------- グループ設定のUI操作 ---------- */
+async function uiCreateGroup() {
+  const btn = document.getElementById('btn-create-group');
+  if (btn) { btn.disabled = true; btn.querySelector('.role-name').textContent = '作成中…'; }
+  try {
+    await createGroup();
+    state.groupSetup = false;
+    state.groupCreated = true;  // コード表示画面へ
+  } catch (e) {
+    alert('グループを作れませんでした。通信環境を確認してもう一度おためしください。');
+  }
+  render(true);
+}
+async function uiJoinGroup() {
+  const code = document.getElementById('group-code-input').value.trim();
+  if (!/^\d{6}$/.test(code)) { alert('6けたの数字コードを入れてください'); return; }
+  const ok = await joinGroup(code).catch(() => false);
+  if (!ok) { alert('そのコードのグループが見つかりません。コードをたしかめてください。'); return; }
+  state.groupSetup = false;
+  render(true);
+}
+function skipGroup() {
+  state.groupSetup = false;
+  render(true);
+}
+function openGroupSetup() {
+  state.groupSetup = true;
+  closeSettings();
+  render(true);
+}
+function closeGroupCreated() {
+  state.groupCreated = false;
+  render(true);
+}
+function uiLeaveGroup() {
+  if (confirm('みまもりグループから退出します。よろしいですか？（記録はこの端末に残ります）')) {
+    leaveGroup();
+    closeSettings();
+    render();
+  }
 }
 
 /* ---------- 操作（本人ビュー） ---------- */
@@ -855,11 +1090,12 @@ function switchView(view) {
 
 function render(animate = false) {
   const choosing = !state.fixedView && !state.role;  // 初回：利用者が未選択
+  const setup = !choosing && (state.groupSetup || state.groupCreated);  // グループ設定中
   const tabs = document.getElementById('tabs');
   const gear = document.getElementById('btn-gear');
   // タブは「デモ用トグルON」のときだけ表示。⚙️は選択後に表示（URL固定時は非表示）
-  tabs.style.display = (!choosing && !state.fixedView && state.tabsMode) ? '' : 'none';
-  gear.style.display = (!choosing && !state.fixedView) ? '' : 'none';
+  tabs.style.display = (!choosing && !setup && !state.fixedView && state.tabsMode) ? '' : 'none';
+  gear.style.display = (!choosing && !setup && !state.fixedView) ? '' : 'none';
   tabs.dataset.view = state.currentView;
   document.getElementById('tab-person').classList.toggle('active', state.currentView === 'person');
   document.getElementById('tab-family').classList.toggle('active', state.currentView === 'family');
@@ -869,8 +1105,53 @@ function render(animate = false) {
   const main = document.getElementById('main');
   main.className = animate ? 'anim' : '';
   main.innerHTML = choosing ? renderRoleSelect()
+    : state.groupCreated ? renderGroupCreated()
+    : state.groupSetup ? renderGroupSetup()
     : state.currentView === 'person' ? renderPerson() : renderFamily();
   state.lastChanged = null;
+}
+
+/* ---------- グループ設定画面 ---------- */
+function groupJoinFormHTML() {
+  return '<div class="group-join">'
+    + '<input id="group-code-input" type="tel" inputmode="numeric" maxlength="6" placeholder="123456">'
+    + '<button onclick="uiJoinGroup()">つなげる</button>'
+    + '</div>';
+}
+
+function renderGroupSetup() {
+  let html = '<div class="role-select">';
+  if (state.role === 'family') {
+    html += '<div class="role-title">みまもりグループを<br>つくりましょう</div>'
+      + '<button class="role-card" id="btn-create-group" onclick="uiCreateGroup()">'
+      +   '<span class="role-emoji">🔗</span>'
+      +   '<span class="role-name">グループを作る</span>'
+      +   '<span class="role-desc">6けたのコードが発行されます</span></button>'
+      + '<div class="group-divider">— すでにコードがある場合 —</div>'
+      + groupJoinFormHTML();
+  } else {
+    html += '<div class="role-title">かぞくと<br>つながりますか？</div>'
+      + '<div class="card" style="text-align:center">'
+      +   '<div class="modal-label" style="margin-bottom:10px">家族から聞いた 6けたのコードを入れてください</div>'
+      +   groupJoinFormHTML()
+      + '</div>';
+  }
+  html += '<button class="btn-skip" onclick="skipGroup()">あとでつなげる（まず ひとりで使う）</button>'
+    + '</div>';
+  return html;
+}
+
+function renderGroupCreated() {
+  return '<div class="role-select">'
+    + '<div class="role-title">グループが<br>できました！</div>'
+    + '<div class="card group-code-card">'
+    +   '<div class="modal-label">みまもりコード</div>'
+    +   '<div class="group-code">' + esc(state.groupCode || '') + '</div>'
+    +   '<div class="role-desc">本人のスマホで「まもりわ」をひらいて、このコードを入力してもらってください</div>'
+    + '</div>'
+    + '<button class="btn-close" onclick="closeGroupCreated()">はじめる</button>'
+    + '<div class="role-note">コードはあとから ⚙️ せってい でも確認できます</div>'
+    + '</div>';
 }
 
 function renderRoleSelect() {
@@ -1045,9 +1326,11 @@ const fixedViewParam = new URLSearchParams(location.search).get('view');
 state.fixedView = (fixedViewParam === 'person' || fixedViewParam === 'family') ? fixedViewParam : null;
 state.role = localStorage.getItem(ROLE_KEY);
 state.tabsMode = localStorage.getItem(TABS_KEY) === '1';
+state.groupCode = localStorage.getItem(GROUP_KEY);
 if (state.fixedView)   state.currentView = state.fixedView;
 else if (state.role)   state.currentView = state.role;
 
+syncInit();  // firebase-config.js に設定があれば「みまもりグループ」同期を起動
 render(true);
 setInterval(() => render(), 30000);
 
