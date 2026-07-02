@@ -334,6 +334,7 @@
     font-size: 17px;
   }
   .voice-note .label { font-size: 14px; color: var(--gray); display: block; margin-bottom: 4px; }
+  .voice-audio { width: 100%; margin-top: 12px; border-radius: 12px; }
 
   .done-msg { margin-top: 10px; color: var(--green); font-weight: bold; font-size: 17px; }
 
@@ -786,6 +787,8 @@ const state = {
   timeline: [],       // { time: Date, icon, text } 家族ビューの履歴用
   currentView: 'person',
   recording: false,
+  voiceSending: false, // 録音終了後、送信処理中
+  voiceAudio: null,    // 最新の声のメッセージ { data(base64), mime, date, time }
   lastChanged: null,  // 直前に記録された要素だけをポップ表示させるための目印
   groupCode: null,    // みまもりグループの6桁コード（参加中のみ）
   groupSetup: false,  // グループ設定画面を表示中
@@ -853,6 +856,7 @@ function saveStateLocal() {
     moodLogs: state.moodLogs,
     appointments: state.appointments,
     personName: state.personName,
+    voiceAudio: state.voiceAudio,
     timeline: state.timeline.map(t => ({ icon: t.icon, text: t.text, time: t.time.toISOString() })),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -870,6 +874,7 @@ function loadState() {
     if (data.moodLogs)    state.moodLogs = data.moodLogs;
     if (data.appointments) state.appointments = data.appointments;
     if (data.personName)  state.personName = data.personName;
+    if (data.voiceAudio)  state.voiceAudio = data.voiceAudio;
     if (data.timeline)    state.timeline = data.timeline.map(t => ({ ...t, time: new Date(t.time) }));
     // 日付が変わっていたら「今日の服薬」をリセット（履歴・体調・予定は残す）
     if (data.savedDate !== todayISO()) {
@@ -1022,6 +1027,7 @@ function sharedData() {
     moodLogs: state.moodLogs,
     appointments: state.appointments,
     personName: state.personName,
+    voiceAudio: state.voiceAudio,
     timeline: state.timeline.map(t => ({ icon: t.icon, text: t.text, time: t.time.toISOString() })),
     updatedAt: new Date().toISOString(),
   };
@@ -1042,6 +1048,7 @@ function applyRemote(data) {
   state.moodLogs = data.moodLogs || [];
   state.appointments = data.appointments || [];
   state.personName = data.personName || 'お母さん';
+  state.voiceAudio = data.voiceAudio || null;
   state.timeline = (data.timeline || []).map(t => ({ ...t, time: new Date(t.time) }));
   if (data.savedDate !== todayISO()) {
     // 日付が変わっていたら「今日の服薬」をリセットし、グループにも反映（履歴は残す）
@@ -1186,12 +1193,139 @@ function recordMood(mood) {
   saveState();
   render();
 }
-/* 音声入力：Web Speech API（ブラウザ内蔵の音声認識）で実際に文字起こしする。
-   iPhoneのSafari・AndroidのChromeとも対応。マイク許可が必要（HTTPS上で動作）。
-   非対応ブラウザでは固定の文字起こし例で代替し、デモが止まらないようにする。 */
+/* ---------- 声のメッセージ ----------
+   マイクの音声そのものを録音して家族に届ける（MediaRecorder）。
+   あわせてブラウザの音声認識（Web Speech API）で文字起こしも試みる。
+   文字起こしに失敗しても、声は必ず届く。録音は最大30秒で自動終了。
+   iOS Safari等では停止後のイベントが届かないことがあるため、
+   タイムアウトの保険で必ず録音状態を解除する。 */
+let recorder = null;
+let recorderChunks = [];
 let recognizer = null;
-function startVoice() {
-  if (state.recording) return;
+let transcriptText = null;
+let voiceWatchdog = null;
+
+async function startVoice() {
+  if (state.recording || state.voiceSending) return;
+  if (!navigator.mediaDevices || !window.MediaRecorder) { startVoiceLegacy(); return; }
+  state.voiceMsg = null;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    state.voiceMsg = 'マイクが つかえませんでした。ブラウザの設定で マイクを ゆるしてください';
+    render();
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+             : MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '';
+  recorderChunks = [];
+  try {
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined);
+  } catch (e) {
+    recorder = new MediaRecorder(stream);
+  }
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size) recorderChunks.push(e.data); };
+  recorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    finishRecording(new Blob(recorderChunks, { type: (recorder && recorder.mimeType) || 'audio/webm' }));
+  };
+  startTranscription();
+  state.recording = true;
+  render();
+  recorder.start();
+  clearTimeout(voiceWatchdog);
+  voiceWatchdog = setTimeout(stopVoice, 30000);  // 30秒で自動終了
+}
+
+function startTranscription() {
+  transcriptText = null;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  try {
+    recognizer = new SR();
+    recognizer.lang = 'ja-JP';
+    recognizer.interimResults = false;
+    recognizer.maxAlternatives = 1;
+    recognizer.onresult = (e) => { transcriptText = e.results[0][0].transcript; };
+    recognizer.onerror = () => {};
+    recognizer.start();
+  } catch (e) { recognizer = null; }
+}
+
+function stopVoice() {
+  clearTimeout(voiceWatchdog);
+  if (recognizer) { try { recognizer.stop(); } catch (e) {} }
+  if (recorder && recorder.state === 'recording') {
+    state.recording = false;
+    state.voiceSending = true;
+    render();
+    try { recorder.stop(); } catch (e) { hardResetVoice('うまく ろくおんできませんでした。もういちど おためしください'); }
+    // 保険：stop後のイベントが来ない環境でも必ず解除する
+    setTimeout(() => {
+      if (state.voiceSending) hardResetVoice('うまく ろくおんできませんでした。もういちど おためしください');
+    }, 5000);
+  } else if (state.recording) {
+    // 文字起こしのみのレガシーモード中：結果イベントで処理されるはずだが、
+    // 届かない場合の保険
+    setTimeout(() => {
+      if (state.recording) hardResetVoice('うまく ききとれませんでした。もういちど おためしください');
+    }, 1500);
+  }
+}
+
+function hardResetVoice(msg) {
+  state.recording = false;
+  state.voiceSending = false;
+  if (msg) state.voiceMsg = msg;
+  recorder = null;
+  recognizer = null;
+  render();
+}
+
+async function finishRecording(blob) {
+  // 文字起こしの結果はstopの少しあとに届くことがあるため待つ
+  await new Promise(r => setTimeout(r, 1000));
+  if (!state.voiceSending) return;  // すでに保険で解除済み
+  state.voiceSending = false;
+  const tooBig = blob.size > 500000;  // Firestoreの文書上限(1MB)を超えないように
+  if (blob.size < 1000) {
+    state.voiceMsg = 'うまく ろくおんできませんでした。もういちど おためしください';
+  } else if (tooBig && !transcriptText) {
+    state.voiceMsg = 'メッセージが ながすぎました。もうすこし みじかく おねがいします';
+  } else {
+    if (!tooBig) {
+      state.voiceAudio = {
+        data: await blobToBase64(blob),
+        mime: blob.type,
+        date: todayISO(),
+        time: fmtTime(new Date()),
+      };
+    }
+    if (transcriptText) {
+      state.moodLogs.push({ id: 'voice' + Date.now(), date: todayISO(), mood: null, voiceNote: transcriptText });
+    }
+    addTimeline('🎤', transcriptText ? '声のメッセージ：「' + transcriptText + '」' : '声のメッセージが届きました');
+    state.voiceMsg = null;
+    state.lastChanged = 'voice';
+    saveState();
+  }
+  recorder = null;
+  recognizer = null;
+  render();
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1]);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
+/* 録音ができない古い環境：文字起こしのみ（さらに無理なら固定例文） */
+function startVoiceLegacy() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { startVoiceFallback(); return; }
   recognizer = new SR();
@@ -1199,44 +1333,34 @@ function startVoice() {
   recognizer.interimResults = false;
   recognizer.maxAlternatives = 1;
   let done = false;
-  recognizer.onresult = (e) => {
-    done = true;
-    finishVoice(e.results[0][0].transcript);
-  };
-  recognizer.onerror = (e) => {
+  const finish = (text, errMsg) => {
     if (done) return;
     done = true;
-    finishVoice(null, e.error === 'not-allowed'
-      ? 'マイクが つかえませんでした。ブラウザの設定で マイクを ゆるしてください'
-      : 'うまく ききとれませんでした。もういちど おためしください');
+    state.recording = false;
+    recognizer = null;
+    if (text) {
+      state.voiceMsg = null;
+      state.moodLogs.push({ id: 'voice' + Date.now(), date: todayISO(), mood: null, voiceNote: text });
+      addTimeline('🎤', '声のメッセージ：「' + text + '」');
+      state.lastChanged = 'voice';
+      saveState();
+    } else {
+      state.voiceMsg = errMsg;
+    }
+    render();
   };
-  recognizer.onend = () => {
-    if (!done) { done = true; finishVoice(null, 'うまく ききとれませんでした。もういちど おためしください'); }
-  };
+  recognizer.onresult = (e) => finish(e.results[0][0].transcript);
+  recognizer.onerror = (e) => finish(null, e.error === 'not-allowed'
+    ? 'マイクが つかえませんでした。ブラウザの設定で マイクを ゆるしてください'
+    : 'うまく ききとれませんでした。もういちど おためしください');
+  recognizer.onend = () => finish(null, 'うまく ききとれませんでした。もういちど おためしください');
   state.recording = true;
   state.voiceMsg = null;
   render();
   recognizer.start();
 }
-function stopVoice() {
-  if (recognizer) recognizer.stop();  // 結果はonresult / onendで処理される
-}
-function finishVoice(text, errMsg) {
-  state.recording = false;
-  recognizer = null;
-  if (text) {
-    state.voiceMsg = null;
-    state.moodLogs.push({ id: 'voice' + Date.now(), date: todayISO(), mood: null, voiceNote: text });
-    addTimeline('🎤', '声のメッセージ：「' + text + '」');
-    state.lastChanged = 'voice';
-    saveState();
-  } else {
-    state.voiceMsg = errMsg;
-  }
-  render();
-}
 function startVoiceFallback() {
-  // 音声認識が使えない環境：2.5秒の「録音中」表示ののち固定の文字起こし例を記録
+  // 音声認識も録音も使えない環境：2.5秒の「録音中」表示ののち固定の文字起こし例を記録
   state.recording = true;
   state.voiceMsg = null;
   render();
@@ -1481,6 +1605,8 @@ function renderPerson() {
         + '</div>';
   html += state.recording
         ? '<button class="btn-voice recording" onclick="stopVoice()"><span class="dot"></span>ろくおん中… はなしおわったら タップ</button>'
+        : state.voiceSending
+        ? '<button class="btn-voice" disabled style="opacity:0.7">おくっています…</button>'
         : '<button class="btn-voice" onclick="startVoice()">🎤 こえで つたえる</button>';
   if (state.voiceMsg) {
     html += '<div class="voice-msg">' + esc(state.voiceMsg) + '</div>';
@@ -1489,6 +1615,10 @@ function renderPerson() {
   if (voice) {
     html += '<div class="voice-note' + (state.lastChanged === 'voice' ? ' pop' : '') + '">'
           + '<span class="label">きょうの こえのメッセージ（文字起こし）</span>' + esc(voice) + '</div>';
+  }
+  if (state.voiceAudio && state.voiceAudio.date === todayISO()) {
+    html += '<audio controls preload="metadata" class="voice-audio" src="data:'
+          + state.voiceAudio.mime + ';base64,' + state.voiceAudio.data + '"></audio>';
   }
   if (mood) html += '<div class="done-msg">✅ きょうの体調を記録しました（家族に届いています）</div>';
   html += '</div>';
@@ -1577,6 +1707,17 @@ function renderFamily() {
   html += '<div class="section-title">🤖 AI要約</div>'
         + '<div class="ai-summary"><span class="label">きょうの様子まとめ</span>'
         + esc(aiSummary()) + '</div>';
+
+  // きょうの声：本人が録音した声のメッセージを再生できる
+  if (state.voiceAudio && state.voiceAudio.date === todayISO()) {
+    const voice = todayVoiceNote();
+    html += '<div class="section-title">🎤 きょうの声</div><div class="card">'
+          + '<div class="modal-label">' + state.voiceAudio.time + ' に届いた声のメッセージ</div>'
+          + '<audio controls preload="metadata" class="voice-audio" style="margin-top:4px" src="data:'
+          + state.voiceAudio.mime + ';base64,' + state.voiceAudio.data + '"></audio>'
+          + (voice ? '<div class="voice-note"><span class="label">文字起こし</span>' + esc(voice) + '</div>' : '')
+          + '</div>';
+  }
 
   // 記録履歴：ダッシュボードには「きょうの直近5件」だけ表示し、
   // それ以上は「すべての履歴」画面（日付ごとの全件表示）へ
