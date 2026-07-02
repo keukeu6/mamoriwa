@@ -869,8 +869,11 @@ const sync = { enabled: false, docBase: null, pushTimer: null, pollTimer: null, 
 function syncInit() {
   const config = window.MAMORIWA_FIREBASE_CONFIG;
   if (!config) return;
+  // データベースIDは「default」：新しいFirebaseコンソールが作るIDで、
+  // 旧来の「(default)」とは別物。SDKのfirestore()は「(default)」固定のため
+  // ここではREST APIでdefaultを直接指定する
   sync.docBase = 'https://firestore.googleapis.com/v1/projects/' + config.projectId
-    + '/databases/(default)/documents/groups/';
+    + '/databases/default/documents/groups/';
   // SDK（認証のみ使用）は設定がある端末だけ読み込む
   const load = (src) => new Promise((ok, ng) => {
     const s = document.createElement('script');
