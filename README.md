@@ -2,6 +2,11 @@
 
 **公開URL**: https://keukeu6.github.io/mamoriwa/
 
+初回に「本人／家族」を選ぶと端末に保存され、次回からそのインターフェースで自動的に開きます。
+変更はヘッダー右上の ⚙️ せってい から（利用者の切り替え・デモ用タブ表示・全リセット）。
+
+配布用の固定リンク（選択画面を出さずにビュー固定で開く。⚙️も非表示）:
+
 - 本人ビュー固定: https://keukeu6.github.io/mamoriwa/?view=person
 - 家族ビュー固定: https://keukeu6.github.io/mamoriwa/?view=family
 
