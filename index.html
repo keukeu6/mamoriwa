@@ -680,6 +680,40 @@
   }
   .group-code.small { font-size: 22px; letter-spacing: 3px; margin: 4px 0; }
 
+  /* ---------- 履歴画面（もどるヘッダー・日付見出し） ---------- */
+  .edit-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .btn-back {
+    border: 1px solid var(--glass-border);
+    background: var(--glass);
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--accent);
+    padding: 10px 16px;
+    border-radius: 12px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(23, 48, 43, 0.08);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-back:active { transform: scale(0.96); }
+  .edit-title { font-size: 20px; font-weight: bold; }
+  .history-day { font-size: 15px; font-weight: bold; color: var(--gray); margin: 18px 6px 8px; }
+  .btn-more {
+    width: 100%;
+    margin-top: 10px;
+    border: 1.5px solid rgba(0, 105, 92, 0.25);
+    background: rgba(0, 105, 92, 0.06);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 12px;
+    border-radius: 12px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-more:active { transform: scale(0.98); }
+
   /* 動きを控えたい設定の利用者には静的表示（高齢者配慮） */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -756,6 +790,7 @@ const state = {
   groupCode: null,    // みまもりグループの6桁コード（参加中のみ）
   groupSetup: false,  // グループ設定画面を表示中
   groupCreated: false, // グループ作成直後のコード表示画面
+  historyOpen: false, // すべての履歴画面を表示中（家族ビュー）
 };
 
 const FAMILY_GRACE_MIN = 30;  // 予定時刻からこの分数を過ぎて未記録なら家族に「未服薬」注意
@@ -803,6 +838,7 @@ function daysUntil(iso) {
 }
 function addTimeline(icon, text) {
   state.timeline.unshift({ time: new Date(), icon, text });
+  if (state.timeline.length > 200) state.timeline.length = 200;  // 肥大化防止
 }
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -835,10 +871,9 @@ function loadState() {
     if (data.appointments) state.appointments = data.appointments;
     if (data.personName)  state.personName = data.personName;
     if (data.timeline)    state.timeline = data.timeline.map(t => ({ ...t, time: new Date(t.time) }));
-    // 日付が変わっていたら「今日の記録」をリセット（体調履歴・予定は残す）
+    // 日付が変わっていたら「今日の服薬」をリセット（履歴・体調・予定は残す）
     if (data.savedDate !== todayISO()) {
       state.medications.forEach(m => { m.takenAt = null; });
-      state.timeline = [];
       saveState();
     }
   } catch (e) {
@@ -1009,9 +1044,8 @@ function applyRemote(data) {
   state.personName = data.personName || 'お母さん';
   state.timeline = (data.timeline || []).map(t => ({ ...t, time: new Date(t.time) }));
   if (data.savedDate !== todayISO()) {
-    // 日付が変わっていたら「今日の記録」をリセットし、グループにも反映
+    // 日付が変わっていたら「今日の服薬」をリセットし、グループにも反映（履歴は残す）
     state.medications.forEach(m => { m.takenAt = null; });
-    state.timeline = [];
     saveState();
   } else {
     saveStateLocal();
@@ -1139,7 +1173,9 @@ function undoMed(id) {
   const med = state.medications.find(m => m.id === id);
   if (!med) return;
   med.takenAt = null;
-  state.timeline = state.timeline.filter(t => !(t.icon === '💊' && t.text.startsWith(med.name)));
+  // 取り消すのは「今日の」服薬記録だけ（過去の履歴は残す）
+  state.timeline = state.timeline.filter(t =>
+    !(t.icon === '💊' && t.text.startsWith(med.name) && toLocalISO(t.time) === todayISO()));
   saveState();
   render();
 }
@@ -1284,12 +1320,23 @@ function aiSummary() {
 /* ---------- 描画 ---------- */
 function switchView(view) {
   state.currentView = view;
+  state.historyOpen = false;
   render(true);  // ビュー切り替え時だけ、ふわっと表示のアニメーションを付ける
+}
+function openHistory() {
+  state.historyOpen = true;
+  render(true);
+  window.scrollTo(0, 0);
+}
+function closeHistory() {
+  state.historyOpen = false;
+  render(true);
 }
 
 function render(animate = false) {
   const choosing = !state.fixedView && !state.role;  // 初回：利用者が未選択
-  const setup = !choosing && (state.groupSetup || state.groupCreated);  // グループ設定中
+  const history = state.historyOpen && state.currentView === 'family';  // 履歴画面
+  const setup = !choosing && (state.groupSetup || state.groupCreated || history);  // 全画面表示中
   const tabs = document.getElementById('tabs');
   const gear = document.getElementById('btn-gear');
   // タブは設定でONのときだけ表示。⚙️は利用開始後に表示（URL固定時は非表示）
@@ -1306,6 +1353,7 @@ function render(animate = false) {
   main.innerHTML = choosing ? (state.welcomeDone ? renderRoleSelect() : renderWelcome())
     : state.groupCreated ? renderGroupCreated()
     : state.groupSetup ? renderGroupSetup()
+    : history ? renderHistory()
     : state.currentView === 'person' ? renderPerson() : renderFamily();
   state.lastChanged = null;
 }
@@ -1462,6 +1510,33 @@ function renderPerson() {
   return html;
 }
 
+function timelineItemHTML(t) {
+  return '<div class="timeline-item"><span class="timeline-time">' + fmtTime(t.time) + '</span>'
+    + '<span class="timeline-icon">' + t.icon + '</span><span>' + esc(t.text) + '</span></div>';
+}
+
+/* すべての履歴：日付ごとにまとめて全件表示する画面 */
+function renderHistory() {
+  let html = '<div class="edit-header">'
+    + '<button class="btn-back" onclick="closeHistory()">← もどる</button>'
+    + '<div class="edit-title">📋 きろくの履歴</div></div>';
+  if (!state.timeline.length) {
+    return html + '<div class="card empty-note">まだ記録はありません</div>';
+  }
+  const groups = {};
+  const order = [];
+  state.timeline.forEach(t => {
+    const d = toLocalISO(t.time);
+    if (!groups[d]) { groups[d] = []; order.push(d); }
+    groups[d].push(t);
+  });
+  order.forEach(d => {
+    html += '<div class="history-day">' + fmtDateJP(d) + (d === todayISO() ? '（きょう）' : '') + '</div>'
+      + '<div class="card">' + groups[d].map(timelineItemHTML).join('') + '</div>';
+  });
+  return html;
+}
+
 function renderFamily() {
   let html = '<div class="date-header"><div class="date">' + esc(state.personName) + 'の きょうの様子</div>'
            + '<div class="greet">' + fmtDateJP(todayISO()) + '</div></div>';
@@ -1503,15 +1578,18 @@ function renderFamily() {
         + '<div class="ai-summary"><span class="label">きょうの様子まとめ</span>'
         + esc(aiSummary()) + '</div>';
 
-  // 記録履歴（本人の記録がリアルタイムに反映される）
+  // 記録履歴：ダッシュボードには「きょうの直近5件」だけ表示し、
+  // それ以上は「すべての履歴」画面（日付ごとの全件表示）へ
   html += '<div class="section-title">📋 きろくの履歴</div><div class="card">';
-  if (state.timeline.length) {
-    html += state.timeline.map(t =>
-      '<div class="timeline-item"><span class="timeline-time">' + fmtTime(t.time) + '</span>'
-      + '<span class="timeline-icon">' + t.icon + '</span><span>' + esc(t.text) + '</span></div>'
-    ).join('');
+  const todays = state.timeline.filter(t => toLocalISO(t.time) === todayISO());
+  const shown = todays.slice(0, 5);
+  if (shown.length) {
+    html += shown.map(timelineItemHTML).join('');
   } else {
     html += '<div class="empty-note">まだ きょうの記録はありません</div>';
+  }
+  if (state.timeline.length > shown.length) {
+    html += '<button class="btn-more" onclick="openHistory()">すべての履歴を見る（全' + state.timeline.length + '件）</button>';
   }
   html += '</div>';
 
