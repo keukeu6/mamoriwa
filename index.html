@@ -854,35 +854,37 @@ function toggleTabs(on) {
   render();
 }
 
-/* ========== みまもりグループ（家族とのリアルタイム同期） ==========
+/* ========== みまもりグループ（家族とのデータ同期） ==========
    仕組み：家族が6桁コードでグループを作成 → 本人がコードを入力して参加。
-   記録は Firestore の groups/{コード} に保存され、参加端末へリアルタイム配信される。
+   記録は Firestore の groups/{コード} に保存され、参加端末は約5秒ごとの
+   ポーリングで取得する（Firestore REST API を使用。SDKのリアルタイム接続は
+   大学・企業ネットワーク等のproxyで遮断されることがあるため、確実に通る
+   通常のHTTPSリクエストだけで同期する）。
    firebase-config.js に設定が入っている場合のみ有効。
    設定がなければ従来どおり端末内保存のみのローカルモードで動く。 */
 const GROUP_KEY = 'mamoriwa-group';
-const sync = { enabled: false, db: null, unsubscribe: null, pushTimer: null };
+const SYNC_POLL_MS = 5000;
+const sync = { enabled: false, docBase: null, pushTimer: null, pollTimer: null, pollNow: null, lastSeen: null };
 
 function syncInit() {
   const config = window.MAMORIWA_FIREBASE_CONFIG;
   if (!config) return;
-  // SDKは設定がある端末だけ読み込む（ローカルモードを軽く保つ）
+  sync.docBase = 'https://firestore.googleapis.com/v1/projects/' + config.projectId
+    + '/databases/(default)/documents/groups/';
+  // SDK（認証のみ使用）は設定がある端末だけ読み込む
   const load = (src) => new Promise((ok, ng) => {
     const s = document.createElement('script');
     s.src = src; s.onload = ok; s.onerror = ng;
     document.head.appendChild(s);
   });
   load('https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js')
-    .then(() => Promise.all([
-      load('https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js'),
-      load('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js'),
-    ]))
+    .then(() => load('https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js'))
     .then(() => {
       firebase.initializeApp(config);
       // 匿名認証：Firestoreルールは「認証済み（アプリ経由）のみ読み書き可」なので、
       // 同期を使う前にサインインを済ませる。2回目以降は端末に保存された認証が自動復元される。
       firebase.auth().onAuthStateChanged((user) => {
         if (!user || sync.enabled) return;
-        sync.db = firebase.firestore();
         sync.enabled = true;
         if (state.groupCode) syncSubscribe();
         render();
@@ -892,7 +894,27 @@ function syncInit() {
     .catch(() => { /* SDKが読めない（オフライン等）場合はローカルモードで続行 */ });
 }
 
-function groupDoc() { return sync.db.collection('groups').doc(state.groupCode); }
+/* Firestore REST：グループ文書は { json: 状態のJSON文字列, updatedAt } の2フィールド */
+async function fsGet(code) {
+  const token = await firebase.auth().currentUser.getIdToken();
+  const res = await fetch(sync.docBase + code, { headers: { Authorization: 'Bearer ' + token } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('fs-get-' + res.status);
+  const doc = await res.json();
+  return JSON.parse(doc.fields.json.stringValue);
+}
+async function fsSet(code, data) {
+  const token = await firebase.auth().currentUser.getIdToken();
+  const res = await fetch(sync.docBase + code, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: {
+      json: { stringValue: JSON.stringify(data) },
+      updatedAt: { stringValue: data.updatedAt },
+    } }),
+  });
+  if (!res.ok) throw new Error('fs-set-' + res.status);
+}
 
 function sharedData() {
   return {
@@ -908,7 +930,11 @@ function sharedData() {
 function syncPush() {
   if (!sync.enabled || !state.groupCode) return;
   clearTimeout(sync.pushTimer);
-  sync.pushTimer = setTimeout(() => { groupDoc().set(sharedData()).catch(() => {}); }, 300);
+  sync.pushTimer = setTimeout(() => {
+    const data = sharedData();
+    sync.lastSeen = data.updatedAt;  // 自分の書き込みをポーリングで再適用しない
+    fsSet(state.groupCode, data).catch(() => {});
+  }, 300);
 }
 
 function applyRemote(data) {
@@ -928,24 +954,43 @@ function applyRemote(data) {
 }
 
 function syncSubscribe() {
-  if (sync.unsubscribe) sync.unsubscribe();
-  sync.unsubscribe = groupDoc().onSnapshot((snap) => {
-    if (!snap.exists) return;
-    if (snap.metadata.hasPendingWrites) return;  // 自分の書き込みは適用済み
-    applyRemote(snap.data());
-  });
+  syncStopPolling();
+  const poll = async () => {
+    if (!state.groupCode || document.visibilityState === 'hidden') return;
+    try {
+      const data = await fsGet(state.groupCode);
+      if (data && data.updatedAt !== sync.lastSeen) {
+        sync.lastSeen = data.updatedAt;
+        applyRemote(data);
+      }
+    } catch (e) { /* 一時的な通信エラーは次のポーリングで回復する */ }
+  };
+  sync.pollNow = poll;
+  sync.pollTimer = setInterval(poll, SYNC_POLL_MS);
+  poll();
 }
+
+function syncStopPolling() {
+  if (sync.pollTimer) { clearInterval(sync.pollTimer); sync.pollTimer = null; }
+  sync.pollNow = null;
+}
+
+// 画面に戻ってきたら待たずに即同期（スマホでアプリを開き直した時など）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && sync.pollNow) sync.pollNow();
+});
 
 async function createGroup() {
   // 6桁の数字コード：家族が電話でも本人に伝えやすい形式
   for (let i = 0; i < 5; i++) {
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    const ref = sync.db.collection('groups').doc(code);
-    const snap = await ref.get();
-    if (!snap.exists) {
+    const existing = await fsGet(code);
+    if (existing === null) {
       state.groupCode = code;
       localStorage.setItem(GROUP_KEY, code);
-      await ref.set(sharedData());
+      const data = sharedData();
+      sync.lastSeen = data.updatedAt;
+      await fsSet(code, data);
       syncSubscribe();
       return code;
     }
@@ -954,18 +999,18 @@ async function createGroup() {
 }
 
 async function joinGroup(code) {
-  const ref = sync.db.collection('groups').doc(code);
-  const snap = await ref.get();
-  if (!snap.exists) return false;
+  const data = await fsGet(code);
+  if (data === null) return false;
   state.groupCode = code;
   localStorage.setItem(GROUP_KEY, code);
-  applyRemote(snap.data());  // 参加時はグループ側のデータを正とする
+  sync.lastSeen = data.updatedAt;
+  applyRemote(data);  // 参加時はグループ側のデータを正とする
   syncSubscribe();
   return true;
 }
 
 function leaveGroup() {
-  if (sync.unsubscribe) { sync.unsubscribe(); sync.unsubscribe = null; }
+  syncStopPolling();
   state.groupCode = null;
   localStorage.removeItem(GROUP_KEY);
 }

@@ -2,7 +2,7 @@
    方針：ネットワーク優先＋キャッシュフォールバック。
    オンライン時は常に最新を取得し（開発中に古い画面が残らない）、
    オフライン時はキャッシュ済みの画面で開けるようにする。 */
-const CACHE = 'mamoriwa-v2';
+const CACHE = 'mamoriwa-v3';
 const ASSETS = [
   './',
   './index.html',
