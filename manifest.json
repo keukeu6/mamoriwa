@@ -1,0 +1,17 @@
+{
+  "name": "まもりわ",
+  "short_name": "まもりわ",
+  "description": "高齢者見守りアプリ — 服薬・体調・予定を本人が記録し、家族に共有するプロトタイプ",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#e7f4ee",
+  "theme_color": "#00695c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
