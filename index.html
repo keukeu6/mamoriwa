@@ -577,6 +577,21 @@
     box-shadow: 0 4px 14px rgba(46, 125, 50, 0.22);
   }
   .role-switch button.current small { color: var(--green); }
+  .name-input {
+    width: 100%;
+    font-size: 18px;
+    padding: 12px;
+    border: 1.5px solid rgba(23, 48, 43, 0.18);
+    background: rgba(255, 255, 255, 0.75);
+    border-radius: 12px;
+    font-family: inherit;
+    color: var(--text);
+  }
+  .name-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 105, 92, 0.15);
+  }
   .toggle-row { display: flex; align-items: center; gap: 10px; font-size: 16px; cursor: pointer; }
   .toggle-row input { width: 22px; height: 22px; accent-color: var(--accent); flex-shrink: 0; }
   .btn-danger {
@@ -695,6 +710,11 @@
   <div class="modal">
     <h2>⚙️ せってい</h2>
     <div class="modal-section">
+      <div class="modal-label">本人の呼び名（家族の画面に表示されます）</div>
+      <input id="person-name-input" class="name-input" type="text" maxlength="10"
+             placeholder="例：お母さん、おばあちゃん" onchange="setPersonName(this.value)">
+    </div>
+    <div class="modal-section">
       <div class="modal-label">利用者の切り替え</div>
       <div class="role-switch">
         <button id="set-role-person" onclick="setRole('person')">👵 本人<br><small>きろくする</small></button>
@@ -728,6 +748,7 @@ const state = {
   medications: [],    // { id, name, scheduledTime, takenAt } 登録は家族ビューから
   moodLogs: [],       // { id, date, mood: 'good'|'normal'|'bad'|null, voiceNote }
   appointments: [],   // { id, title, date, notified } 登録は家族ビューから
+  personName: 'お母さん',  // 本人の呼び名（⚙️設定で変更。グループにも同期）
   timeline: [],       // { time: Date, icon, text } 家族ビューの履歴用
   currentView: 'person',
   recording: false,
@@ -795,6 +816,7 @@ function saveStateLocal() {
     medications: state.medications,
     moodLogs: state.moodLogs,
     appointments: state.appointments,
+    personName: state.personName,
     timeline: state.timeline.map(t => ({ icon: t.icon, text: t.text, time: t.time.toISOString() })),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -811,6 +833,7 @@ function loadState() {
     if (data.medications) state.medications = data.medications;
     if (data.moodLogs)    state.moodLogs = data.moodLogs;
     if (data.appointments) state.appointments = data.appointments;
+    if (data.personName)  state.personName = data.personName;
     if (data.timeline)    state.timeline = data.timeline.map(t => ({ ...t, time: new Date(t.time) }));
     // 日付が変わっていたら「今日の記録」をリセット（体調履歴・予定は残す）
     if (data.savedDate !== todayISO()) {
@@ -852,7 +875,18 @@ function setRole(role) {
   chooseRole(role);
   closeSettings();
 }
+function setPersonName(value) {
+  value = value.trim();
+  if (!value) {
+    document.getElementById('person-name-input').value = state.personName;
+    return;
+  }
+  state.personName = value;
+  saveState();  // グループ参加中なら他の家族の画面にも反映される
+  render();
+}
 function openSettings() {
+  document.getElementById('person-name-input').value = state.personName;
   document.getElementById('set-role-person').classList.toggle('current', state.role === 'person');
   document.getElementById('set-role-family').classList.toggle('current', state.role === 'family');
   document.getElementById('tabs-toggle').checked = state.tabsMode;
@@ -952,6 +986,7 @@ function sharedData() {
     medications: state.medications,
     moodLogs: state.moodLogs,
     appointments: state.appointments,
+    personName: state.personName,
     timeline: state.timeline.map(t => ({ icon: t.icon, text: t.text, time: t.time.toISOString() })),
     updatedAt: new Date().toISOString(),
   };
@@ -971,6 +1006,7 @@ function applyRemote(data) {
   state.medications = data.medications || [];
   state.moodLogs = data.moodLogs || [];
   state.appointments = data.appointments || [];
+  state.personName = data.personName || 'お母さん';
   state.timeline = (data.timeline || []).map(t => ({ ...t, time: new Date(t.time) }));
   if (data.savedDate !== todayISO()) {
     // 日付が変わっていたら「今日の記録」をリセットし、グループにも反映
@@ -1428,7 +1464,7 @@ function renderPerson() {
 }
 
 function renderFamily() {
-  let html = '<div class="date-header"><div class="date">お母さんの きょうの様子</div>'
+  let html = '<div class="date-header"><div class="date">' + esc(state.personName) + 'の きょうの様子</div>'
            + '<div class="greet">' + fmtDateJP(todayISO()) + '</div></div>';
 
   // 未服薬の注意表示（一定時間記録がない場合）
