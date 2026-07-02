@@ -1,5 +1,10 @@
 # まもりわ — 第1工程プロトタイプ（MVP）
 
+**公開URL**: https://keukeu6.github.io/mamoriwa/
+
+- 本人ビュー固定: https://keukeu6.github.io/mamoriwa/?view=person
+- 家族ビュー固定: https://keukeu6.github.io/mamoriwa/?view=family
+
 高齢者見守りアプリ「まもりわ」のプロトタイプです。
 引き継ぎ資料（まもりわ_Code引き継ぎ資料_改訂版.docx）の第1工程仕様に基づき、AIを活用した実装で作成しています。
 
